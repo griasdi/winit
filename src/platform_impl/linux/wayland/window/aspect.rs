@@ -10,6 +10,8 @@
 
 use std::sync::Mutex;
 
+use sctk::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge as XdgResizeEdge;
+
 use crate::dpi::LogicalSize;
 
 use super::WindowId;
@@ -32,26 +34,60 @@ pub fn get(id: WindowId) -> Option<f64> {
     RATIOS.lock().unwrap().iter().find(|(window, _)| *window == id).map(|(_, ratio)| *ratio)
 }
 
-/// `requested` in `ratio`, following the side that changed more against `current`: a drag on
-/// the left or right edge sets the width, one on the top or bottom edge the height, a corner
-/// the side it moved further. The result keeps `ratio` within `min` and `max` where both
-/// allow it; whole logical pixels, never zero.
+/// Which side of the window a resize sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lead {
+    /// The left or right edge: the width.
+    Width,
+    /// The top or bottom edge: the height.
+    Height,
+    /// A corner: the side the pointer is further out on, so the corner follows the pointer
+    /// on that side.
+    Corner,
+    /// A resize the compositor started (no edge known): the side that changed more since its
+    /// previous request.
+    Unknown,
+}
+
+impl Lead {
+    pub fn of(edge: XdgResizeEdge) -> Self {
+        match edge {
+            XdgResizeEdge::Left | XdgResizeEdge::Right => Self::Width,
+            XdgResizeEdge::Top | XdgResizeEdge::Bottom => Self::Height,
+            XdgResizeEdge::TopLeft
+            | XdgResizeEdge::TopRight
+            | XdgResizeEdge::BottomLeft
+            | XdgResizeEdge::BottomRight => Self::Corner,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// `requested` in `ratio`, with the side `lead` names taken from it; `previous` is the
+/// compositor's previous request in this resize (or the window's size before the first). Both
+/// are compositor sizes, never a locked one: the compositor keeps sizing from its own
+/// geometry, so comparing with a locked size would flip the leading side from one configure
+/// to the next. The result keeps `ratio` within `min` and `max` where both allow it; whole
+/// logical pixels, never zero.
 pub fn lock(
     requested: LogicalSize<u32>,
-    current: LogicalSize<u32>,
+    previous: LogicalSize<u32>,
+    lead: Lead,
     ratio: f64,
     min: LogicalSize<u32>,
     max: Option<LogicalSize<u32>>,
 ) -> LogicalSize<u32> {
-    let dw = requested.width.abs_diff(current.width);
-    let dh = requested.height.abs_diff(current.height);
-    let (mut w, mut h) = if dw >= dh {
-        let w = f64::from(requested.width);
-        (w, w / ratio)
-    } else {
-        let h = f64::from(requested.height);
-        (h * ratio, h)
+    let rw = f64::from(requested.width);
+    let rh = f64::from(requested.height);
+    let by_width = match lead {
+        Lead::Width => true,
+        Lead::Height => false,
+        Lead::Corner => rw / ratio >= rh,
+        Lead::Unknown => {
+            requested.width.abs_diff(previous.width) >= requested.height.abs_diff(previous.height)
+        },
     };
+    let (mut w, mut h) = if by_width { (rw, rw / ratio) } else { (rh * ratio, rh) };
     let grow = (f64::from(min.width) / w).max(f64::from(min.height) / h);
     if grow > 1.0 {
         w *= grow;
@@ -78,35 +114,48 @@ mod tests {
         LogicalSize::new(width, height)
     }
 
+    const WIDE: f64 = 16.0 / 9.0;
+
     #[test]
     fn a_side_edge_sets_the_width() {
-        let got = lock(size(800, 360), size(640, 360), 16.0 / 9.0, MIN, None);
-        assert_eq!(got, size(800, 450));
+        // The compositor keeps its starting height while the locked height grew.
+        let got = lock(size(820, 360), size(800, 360), Lead::Width, WIDE, MIN, None);
+        assert_eq!(got, size(820, 461));
     }
 
     #[test]
     fn a_top_or_bottom_edge_sets_the_height() {
-        let got = lock(size(640, 450), size(640, 360), 16.0 / 9.0, MIN, None);
+        let got = lock(size(640, 450), size(640, 440), Lead::Height, WIDE, MIN, None);
         assert_eq!(got, size(800, 450));
     }
 
     #[test]
-    fn a_corner_follows_the_side_it_moved_further() {
-        let got = lock(size(700, 380), size(640, 360), 16.0 / 9.0, MIN, None);
+    fn a_corner_follows_the_pointer_on_the_side_it_is_further_out() {
+        let got = lock(size(700, 380), size(690, 370), Lead::Corner, WIDE, MIN, None);
         assert_eq!(got, size(700, 394));
-        let got = lock(size(660, 420), size(640, 360), 16.0 / 9.0, MIN, None);
+        let got = lock(size(660, 420), size(650, 400), Lead::Corner, WIDE, MIN, None);
         assert_eq!(got, size(747, 420));
     }
 
     #[test]
+    fn a_resize_the_compositor_started_follows_its_own_requests() {
+        // Against the locked 800x450 the height would seem to change more and the window
+        // would jump back to 640x360 (the flicker this replaced).
+        let got = lock(size(820, 360), size(800, 360), Lead::Unknown, WIDE, MIN, None);
+        assert_eq!(got, size(820, 461));
+    }
+
+    #[test]
     fn the_min_size_grows_it_in_the_ratio() {
-        let got = lock(size(100, 108), size(640, 360), 16.0 / 9.0, size(192, 108), None);
+        let min = size(192, 108);
+        let got = lock(size(100, 108), size(110, 108), Lead::Width, WIDE, min, None);
         assert_eq!(got, size(192, 108));
     }
 
     #[test]
     fn the_max_size_shrinks_it_in_the_ratio() {
-        let got = lock(size(2000, 360), size(640, 360), 2.0, MIN, Some(size(1000, 1000)));
+        let max = Some(size(1000, 1000));
+        let got = lock(size(2000, 360), size(1900, 360), Lead::Width, 2.0, MIN, max);
         assert_eq!(got, size(1000, 500));
     }
 

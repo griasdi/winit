@@ -129,6 +129,11 @@ pub struct WindowState {
     max_inner_size: Option<LogicalSize<u32>>,
     resize_increments: Option<LogicalSize<u32>>,
 
+    /// The side the current or next interactive resize sets, from the edge it started at.
+    resize_lead: super::aspect::Lead,
+    /// The compositor's previous size request in the current interactive resize.
+    resize_request: Option<LogicalSize<u32>>,
+
     /// The size of the window when no states were applied to it. The primary use for it
     /// is to fallback to original window size, before it was maximized, if the compositor
     /// sends `None` for the new size in the configure.
@@ -204,6 +209,8 @@ impl WindowState {
             max_inner_size: None,
             min_inner_size: MIN_WINDOW_SIZE,
             resize_increments: None,
+            resize_lead: super::aspect::Lead::Unknown,
+            resize_request: None,
             pointer_constraints,
             pointers: Default::default(),
             queue_handle: queue_handle.clone(),
@@ -388,14 +395,21 @@ impl WindowState {
             if let Some(ratio) =
                 super::aspect::get(super::super::make_wid(self.window.wl_surface()))
             {
+                let requested = new_size;
                 new_size = super::aspect::lock(
-                    new_size,
-                    self.size,
+                    requested,
+                    self.resize_request.unwrap_or(self.size),
+                    self.resize_lead,
                     ratio,
                     self.min_inner_size,
                     self.max_inner_size,
                 );
+                self.resize_request = Some(requested);
             }
+        } else if self.last_configure.as_ref().is_some_and(WindowConfigure::is_resizing) {
+            // The resize ended; a later one the compositor starts has no known edge.
+            self.resize_lead = super::aspect::Lead::Unknown;
+            self.resize_request = None;
         }
 
         let new_state = configure.state;
@@ -449,14 +463,17 @@ impl WindowState {
     }
 
     /// Start interacting drag resize.
-    pub fn drag_resize_window(&self, direction: ResizeDirection) -> Result<(), ExternalError> {
+    pub fn drag_resize_window(&mut self, direction: ResizeDirection) -> Result<(), ExternalError> {
+        let edge = direction.into();
+        self.resize_lead = super::aspect::Lead::of(edge);
+        self.resize_request = None;
         let xdg_toplevel = self.window.xdg_toplevel();
 
         // TODO(kchibisov) handle touch serials.
         self.apply_on_pointer(|_, data| {
             let serial = data.latest_button_serial();
             let seat = data.seat();
-            xdg_toplevel.resize(seat, serial, direction.into());
+            xdg_toplevel.resize(seat, serial, edge);
         });
 
         Ok(())
@@ -506,6 +523,8 @@ impl WindowState {
                     ResizeEdge::BottomRight => XdgResizeEdge::BottomRight,
                     _ => return None,
                 };
+                self.resize_lead = super::aspect::Lead::of(edge);
+                self.resize_request = None;
                 self.window.resize(seat, serial, edge);
             },
             FrameAction::ShowMenu(x, y) => self.window.show_window_menu(seat, serial, (x, y)),
