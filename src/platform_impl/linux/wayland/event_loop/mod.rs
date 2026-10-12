@@ -472,6 +472,25 @@ impl<T: 'static> EventLoop<T> {
         });
 
         for window_id in window_ids.iter() {
+            // A size the window applied itself (`request_inner_size`), as the window has it now.
+            let resized = self.with_state(|state| {
+                let requests = state.window_requests.get_mut().get(window_id)?;
+                if !requests.take_resized() {
+                    return None;
+                }
+                let window = state.windows.get_mut().get(window_id)?.lock().unwrap();
+                Some(logical_to_physical_rounded(window.inner_size(), window.scale_factor()))
+            });
+            if let Some(size) = resized {
+                callback(
+                    Event::WindowEvent {
+                        window_id: crate::window::WindowId(*window_id),
+                        event: WindowEvent::Resized(size),
+                    },
+                    &self.window_target,
+                );
+            }
+
             let event = self.with_state(|state| {
                 let window_requests = state.window_requests.get_mut();
                 if window_requests.get(window_id).unwrap().take_closed() {

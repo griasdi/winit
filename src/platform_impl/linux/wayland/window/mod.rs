@@ -190,6 +190,7 @@ impl Window {
         let window_requests = WindowRequests {
             redraw_requested: AtomicBool::new(true),
             closed: AtomicBool::new(false),
+            resized: AtomicBool::new(false),
         };
         let window_requests = Arc::new(window_requests);
         state.window_requests.get_mut().insert(window_id, window_requests.clone());
@@ -312,7 +313,16 @@ impl Window {
     #[inline]
     pub fn request_inner_size(&self, size: Size) -> Option<PhysicalSize<u32>> {
         let mut window_state = self.window_state.lock().unwrap();
+        let old_size = window_state.inner_size();
         let new_size = window_state.request_inner_size(size);
+        // The size applies right away, without a configure, so nothing else reports it. A
+        // caller that ignores the returned size would keep drawing at the old one, which the
+        // compositor then scales into the new viewport. The event loop reports the size the
+        // window has when it dispatches, so a configure in between is not reported back.
+        if window_state.inner_size() != old_size {
+            self.window_requests.resized.store(true, Ordering::Relaxed);
+        }
+        drop(window_state);
         self.request_redraw();
         Some(new_size)
     }
@@ -730,6 +740,9 @@ pub struct WindowRequests {
 
     /// Redraw Requested.
     pub redraw_requested: AtomicBool,
+
+    /// The window applied a size of its own (`request_inner_size`) that is not reported yet.
+    pub resized: AtomicBool,
 }
 
 impl WindowRequests {
@@ -739,6 +752,10 @@ impl WindowRequests {
 
     pub fn take_redraw_requested(&self) -> bool {
         self.redraw_requested.swap(false, Ordering::Relaxed)
+    }
+
+    pub fn take_resized(&self) -> bool {
+        self.resized.swap(false, Ordering::Relaxed)
     }
 }
 
