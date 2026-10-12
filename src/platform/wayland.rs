@@ -96,6 +96,19 @@ impl WindowExtWayland for Window {
     }
 }
 
+/// Locks the aspect ratio (width over height) of the Wayland window whose `wl_surface` is
+/// `surface` while the user resizes it with the pointer; `None` unlocks it.
+///
+/// `surface` is the pointer of the window's raw window handle (`WaylandWindowHandle::surface`),
+/// so a toolkit that hands out only raw handles can set it. xdg-shell has no aspect ratio
+/// hint, but during an interactive resize the client may pick a smaller size than the
+/// compositor suggests; the lock picks the size in `ratio` that follows the dragged side. A
+/// size the compositor imposes (maximized, fullscreen, tiled) stays as it is, and the lock does
+/// not resize the window by itself. Unknown surfaces and X11 windows are not affected.
+pub fn set_aspect_ratio(surface: NonNull<c_void>, ratio: Option<f64>) {
+    crate::platform_impl::wayland::set_aspect_ratio(surface, ratio);
+}
+
 /// Additional methods on [`WindowAttributes`] that are specific to Wayland.
 pub trait WindowAttributesExtWayland {
     /// Build window with the given name.

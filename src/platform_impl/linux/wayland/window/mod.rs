@@ -34,6 +34,7 @@ use super::state::WinitState;
 use super::types::xdg_activation::XdgActivationTokenData;
 use super::{ActiveEventLoop, WaylandError, WindowId};
 
+pub(crate) mod aspect;
 pub(crate) mod state;
 
 pub use state::WindowState;
@@ -727,6 +728,7 @@ impl Window {
 
 impl Drop for Window {
     fn drop(&mut self) {
+        aspect::set(self.window_id, None);
         self.window_requests.closed.store(true, Ordering::Relaxed);
         self.event_loop_awakener.ping();
     }

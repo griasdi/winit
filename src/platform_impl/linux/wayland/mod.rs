@@ -77,6 +77,11 @@ fn make_wid(surface: &WlSurface) -> WindowId {
     WindowId(surface.id().as_ptr() as u64)
 }
 
+/// See [`crate::platform::wayland::set_aspect_ratio`].
+pub fn set_aspect_ratio(surface: std::ptr::NonNull<std::ffi::c_void>, ratio: Option<f64>) {
+    window::aspect::set(WindowId(surface.as_ptr() as u64), ratio);
+}
+
 /// The default routine does floor, but we need round on Wayland.
 fn logical_to_physical_rounded(size: LogicalSize<u32>, scale_factor: f64) -> PhysicalSize<u32> {
     let width = size.width as f64 * scale_factor;

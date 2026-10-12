@@ -378,6 +378,26 @@ impl WindowState {
             }
         }
 
+        // Keep a locked aspect ratio while the user drags the window's edge or corner; a size
+        // the compositor imposes otherwise (tiling, a script, a restore) is taken as is.
+        if configure.is_resizing()
+            && !configure.is_maximized()
+            && !configure.is_fullscreen()
+            && !configure.is_tiled()
+        {
+            if let Some(ratio) =
+                super::aspect::get(super::super::make_wid(self.window.wl_surface()))
+            {
+                new_size = super::aspect::lock(
+                    new_size,
+                    self.size,
+                    ratio,
+                    self.min_inner_size,
+                    self.max_inner_size,
+                );
+            }
+        }
+
         let new_state = configure.state;
         let old_state = self.last_configure.as_ref().map(|configure| configure.state);
 
