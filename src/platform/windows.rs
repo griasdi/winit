@@ -19,6 +19,18 @@ pub type HMENU = isize;
 /// Monitor Handle type used by Win32 API
 pub type HMONITOR = isize;
 
+/// Locks the aspect ratio (width over height) of the window `hwnd` while the user resizes it by
+/// an edge or corner (`WM_SIZING`); `None` unlocks it.
+///
+/// `hwnd` is the value of the window's raw window handle (`Win32WindowHandle::hwnd`), so a
+/// toolkit that hands out only raw handles can set it. The size follows the dragged side in
+/// `ratio` within the min and max size, and takes precedence over resize increments. The lock
+/// does not resize the window by itself; maximize, fullscreen and `request_inner_size` are not
+/// affected. A ratio that is not a finite positive number unlocks.
+pub fn set_aspect_ratio(hwnd: HWND, ratio: Option<f64>) {
+    crate::platform_impl::set_aspect_ratio(hwnd, ratio);
+}
+
 /// Describes a system-drawn backdrop material of a window.
 ///
 /// For a detailed explanation, see [`DWM_SYSTEMBACKDROP_TYPE docs`].

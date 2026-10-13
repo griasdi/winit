@@ -1303,6 +1303,7 @@ unsafe fn public_window_callback_inner(
         },
 
         WM_NCDESTROY => {
+            super::aspect::set(window, None);
             unsafe { super::set_window_long(window, GWL_USERDATA, 0) };
             userdata.userdata_removed.set(true);
             result = ProcResult::Value(0);
@@ -1465,6 +1466,40 @@ unsafe fn public_window_callback_inner(
                 let half_one = increment / 2;
                 let half_two = increment - half_one;
                 half_one - (value - half_two) % increment
+            }
+
+            if let Some(ratio) = super::aspect::get(window) {
+                let side = wparam as u32;
+                // The desired new size of the window, decorations included.
+                let rect = unsafe { &mut *(lparam as *mut RECT) };
+                let (scale_factor, flags, min_size, max_size) = {
+                    let state = userdata.window_state_lock();
+                    (state.scale_factor, state.window_flags, state.min_size, state.max_size)
+                };
+                let adj_rect = flags.adjust_rect(window, *rect).unwrap_or(*rect);
+                let deco_width = rect.left - adj_rect.left + adj_rect.right - rect.right;
+                let deco_height = rect.top - adj_rect.top + adj_rect.bottom - rect.bottom;
+                let width = rect.right - rect.left - deco_width;
+                let height = rect.bottom - rect.top - deco_height;
+                let (w, h) = super::aspect::lock(
+                    width,
+                    height,
+                    side,
+                    ratio,
+                    min_size.map(|size| size.to_physical(scale_factor)),
+                    max_size.map(|size| size.to_physical(scale_factor)),
+                );
+                // The edge opposite the dragged one stays.
+                match side {
+                    WMSZ_LEFT | WMSZ_TOPLEFT | WMSZ_BOTTOMLEFT => rect.left -= w - width,
+                    _ => rect.right += w - width,
+                }
+                match side {
+                    WMSZ_TOP | WMSZ_TOPLEFT | WMSZ_TOPRIGHT => rect.top -= h - height,
+                    _ => rect.bottom += h - height,
+                }
+                result = ProcResult::DefWindowProc(wparam);
+                return;
             }
 
             let scale_factor = userdata.window_state_lock().scale_factor;

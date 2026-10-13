@@ -21,6 +21,11 @@ use crate::icon::Icon;
 use crate::keyboard::Key;
 use crate::platform::windows::{BackdropType, Color, CornerPreference};
 
+/// See [`crate::platform::windows::set_aspect_ratio`].
+pub fn set_aspect_ratio(hwnd: HWND, ratio: Option<f64>) {
+    aspect::set(hwnd, ratio);
+}
+
 #[derive(Clone, Debug)]
 pub struct PlatformSpecificWindowAttributes {
     pub owner: Option<HWND>,
@@ -181,6 +186,7 @@ unsafe fn set_window_long(hwnd: HWND, nindex: WINDOW_LONG_PTR_INDEX, dwnewlong: 
 
 #[macro_use]
 mod util;
+mod aspect;
 mod dark_mode;
 mod definitions;
 mod dpi;
