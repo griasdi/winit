@@ -23,7 +23,7 @@ use super::event::{
     scancode_to_physicalkey, KeyEventExtra,
 };
 use super::window::WinitWindow;
-use super::DEVICE_ID;
+use super::{surrounding, DEVICE_ID};
 use crate::dpi::{LogicalPosition, LogicalSize};
 use crate::event::{
     DeviceEvent, ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase,
@@ -130,6 +130,21 @@ pub struct ViewState {
     /// True if the current key event should be forwarded
     /// to the application, even during IME
     forward_key_to_app: Cell<bool>,
+
+    /// True while `key_down` hands the event to `interpretKeyEvents`.
+    ///
+    /// A commit the input system makes then belongs to the key: the digit that picks an accent
+    /// from the press-and-hold menu must not also reach the application as a key. A commit that
+    /// comes while no key is handled does not: a click in the accent menu, the Character Viewer,
+    /// dictation.
+    in_key_down: Cell<bool>,
+
+    /// True if the input system called `insertText:`, `setMarkedText:`, `unmarkText` or
+    /// `doCommandBySelector:` while `key_down` handled the current key event.
+    ///
+    /// An auto-repeat of a character key that leaves it false was swallowed by the input system
+    /// for press-and-hold, see `is_press_and_hold_repeat`.
+    client_called: Cell<bool>,
 
     marked_text: RefCell<Retained<NSMutableAttributedString>>,
     accepts_first_mouse: bool,
@@ -252,7 +267,8 @@ declare_class!(
             trace_scope!("markedRange");
             let length = self.ivars().marked_text.borrow().length();
             if length > 0 {
-                NSRange::new(0, length)
+                // Measured from the start of the text, where the marked text overlays the caret.
+                NSRange::new(surrounding::marked_location().unwrap_or(0), length)
             } else {
                 // Documented to return `{NSNotFound, 0}` if there is no marked range.
                 NSRange::new(NSNotFound as NSUInteger, 0)
@@ -262,8 +278,10 @@ declare_class!(
         #[method(selectedRange)]
         fn selected_range(&self) -> NSRange {
             trace_scope!("selectedRange");
-            // Documented to return `{NSNotFound, 0}` if there is no selection.
-            NSRange::new(NSNotFound as NSUInteger, 0)
+            // The text the application pushed, if any. Without a selection the system drops
+            // dictated text (winit#4666) and offers no accents.
+            surrounding::selected_range()
+                .unwrap_or_else(|| NSRange::new(NSNotFound as NSUInteger, 0))
         }
 
         #[method(setMarkedText:selectedRange:replacementRange:)]
@@ -271,10 +289,10 @@ declare_class!(
             &self,
             string: &NSObject,
             selected_range: NSRange,
-            _replacement_range: NSRange,
+            replacement_range: NSRange,
         ) {
-            // TODO: Use _replacement_range, requires changing the event to report surrounding text.
             trace_scope!("setMarkedText:selectedRange:replacementRange:");
+            self.ivars().client_called.set(true);
 
             // SAFETY: This method is guaranteed to get either a `NSString` or a `NSAttributedString`.
             let (marked_text, string) = if string.is_kind_of::<NSAttributedString>() {
@@ -295,14 +313,25 @@ declare_class!(
                 )
             };
 
+            // A composition that starts with a replacement range stands in for the text of that
+            // range (a reconversion, a dictation correction): remember it for the commit. The
+            // ranges of later calls name text with the marked text in it, which the application
+            // does not have.
+            let starts_composition = self.ivars().marked_text.borrow().length() == 0;
+            if string.is_empty() {
+                surrounding::cancel_composition();
+            } else if starts_composition {
+                surrounding::start_composition(surrounding::replacement_range(
+                    replacement_range,
+                    false,
+                ));
+            }
+
             // Update marked text.
             *self.ivars().marked_text.borrow_mut() = marked_text;
 
             // Notify IME is active if application still doesn't know it.
-            if self.ivars().ime_state.get() == ImeState::Disabled {
-                *self.ivars().input_source.borrow_mut() = self.current_input_source();
-                self.queue_event(WindowEvent::Ime(Ime::Enabled));
-            }
+            self.ensure_ime_enabled();
 
             if unsafe { self.hasMarkedText() } {
                 self.ivars().ime_state.set(ImeState::Preedit);
@@ -337,7 +366,9 @@ declare_class!(
         #[method(unmarkText)]
         fn unmark_text(&self) {
             trace_scope!("unmarkText");
+            self.ivars().client_called.set(true);
             *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
+            surrounding::cancel_composition();
 
             let input_context = self.inputContext().expect("input context");
             input_context.discardMarkedText();
@@ -360,11 +391,20 @@ declare_class!(
         #[method_id(attributedSubstringForProposedRange:actualRange:)]
         fn attributed_substring_for_proposed_range(
             &self,
-            _range: NSRange,
-            _actual_range: *mut NSRange,
+            range: NSRange,
+            actual_range: *mut NSRange,
         ) -> Option<Retained<NSAttributedString>> {
             trace_scope!("attributedSubstringForProposedRange:actualRange:");
-            None
+            // The text the application pushed, if any. The system asks for the character before
+            // the caret to find the letter an accent replaces, and for the text around the caret
+            // to capitalize and space dictated text. `None` for a range outside of the text.
+            surrounding::substring(range).map(|(text, actual)| {
+                if !actual_range.is_null() {
+                    // SAFETY: The system passes either NULL or a pointer to an `NSRange` to write.
+                    unsafe { actual_range.write(actual) };
+                }
+                NSAttributedString::from_nsstring(&NSString::from_str(&text))
+            })
         }
 
         #[method(characterIndexForPoint:)]
@@ -390,9 +430,14 @@ declare_class!(
         }
 
         #[method(insertText:replacementRange:)]
-        fn insert_text(&self, string: &NSObject, _replacement_range: NSRange) {
-            // TODO: Use _replacement_range, requires changing the event to report surrounding text.
+        fn insert_text(&self, string: &NSObject, replacement_range: NSRange) {
             trace_scope!("insertText:replacementRange:");
+            self.ivars().client_called.set(true);
+            // The system may still call in while the window is torn down (winit#4626), with nobody
+            // left to tell.
+            if self.ivars()._ns_window.load().is_none() {
+                return;
+            }
 
             // SAFETY: This method is guaranteed to get either a `NSString` or a `NSAttributedString`.
             let string = if string.is_kind_of::<NSAttributedString>() {
@@ -407,11 +452,36 @@ declare_class!(
 
             let is_control = string.chars().next().is_some_and(|c| c.is_control());
 
-            // Commit only if we have marked text.
-            if unsafe { self.hasMarkedText() } && self.is_ime_enabled() && !is_control {
-                self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
-                self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
-                self.ivars().ime_state.set(ImeState::Committed);
+            if unsafe { self.hasMarkedText() } {
+                // Commit the composition.
+                if self.is_ime_enabled() && !is_control {
+                    // The commit may name text it replaces (a reconversion, a dictation
+                    // correction).
+                    surrounding::commit(
+                        surrounding::replacement_range(replacement_range, true),
+                        &string,
+                    );
+                    self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
+                    self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
+                    self.ivars().ime_state.set(ImeState::Committed);
+                }
+            } else if self.ivars().ime_allowed.get() && !is_control {
+                // No composition. A typed character is no commit: the application gets it as a
+                // key. Two things are commits:
+                // - The accent menu (press-and-hold) names the letter it replaces. When the user
+                //   picks the accent with a key, that key was handled here; when with the mouse,
+                //   none was.
+                // - The Character Viewer and dictation name no range and come between keys.
+                let replacement = surrounding::replacement_range(replacement_range, false);
+                let in_key_down = self.ivars().in_key_down.get();
+                if replacement.is_some() || !in_key_down {
+                    surrounding::commit(replacement, &string);
+                    self.ensure_ime_enabled();
+                    self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
+                    if in_key_down {
+                        self.ivars().ime_state.set(ImeState::Committed);
+                    }
+                }
             }
         }
 
@@ -420,6 +490,7 @@ declare_class!(
         #[method(doCommandBySelector:)]
         fn do_command_by_selector(&self, _command: Sel) {
             trace_scope!("doCommandBySelector:");
+            self.ivars().client_called.set(true);
             // We shouldn't forward any character from just committed text, since we'll end up sending
             // it twice with some IMEs like Korean one. We'll also always send `Enter` in that case,
             // which is not desired given it was used to confirm IME input.
@@ -455,6 +526,7 @@ declare_class!(
             // Get the characters from the event.
             let old_ime_state = self.ivars().ime_state.get();
             self.ivars().forward_key_to_app.set(false);
+            self.ivars().client_called.set(false);
             let event = replace_event(event, self.option_as_alt());
 
             // The `interpretKeyEvents` function might call
@@ -465,7 +537,9 @@ declare_class!(
             // is not handled by IME and should be handled by the application)
             if self.ivars().ime_allowed.get() {
                 let events_for_nsview = NSArray::from_slice(&[&*event]);
+                self.ivars().in_key_down.set(true);
                 unsafe { self.interpretKeyEvents(&events_for_nsview) };
+                self.ivars().in_key_down.set(false);
 
                 // If the text was committed we must treat the next keyboard event as IME related.
                 if self.ivars().ime_state.get() == ImeState::Committed {
@@ -487,7 +561,11 @@ declare_class!(
                 _ => old_ime_state != self.ivars().ime_state.get(),
             };
 
-            if !had_ime_input || self.ivars().forward_key_to_app.get() {
+            // A held letter that has accents is not repeated: the input system keeps its
+            // auto-repeats to offer the accents. The application must not type it again.
+            let press_and_hold = self.is_press_and_hold_repeat(&event);
+
+            if (!had_ime_input || self.ivars().forward_key_to_app.get()) && !press_and_hold {
                 let key_event = create_key_event(&event, true, unsafe { event.isARepeat() });
                 self.queue_event(WindowEvent::KeyboardInput {
                     device_id: DEVICE_ID,
@@ -803,6 +881,8 @@ impl WinitView {
             input_source: Default::default(),
             ime_allowed: Default::default(),
             forward_key_to_app: Default::default(),
+            in_key_down: Default::default(),
+            client_called: Default::default(),
             marked_text: Default::default(),
             accepts_first_mouse,
             _ns_window: WeakId::new(&window.retain()),
@@ -847,6 +927,44 @@ impl WinitView {
         !matches!(self.ivars().ime_state.get(), ImeState::Disabled)
     }
 
+    /// Tells the application the IME is active, if it does not know yet.
+    fn ensure_ime_enabled(&self) {
+        if self.ivars().ime_state.get() == ImeState::Disabled {
+            *self.ivars().input_source.borrow_mut() = self.current_input_source();
+            self.ivars().ime_state.set(ImeState::Ground);
+            self.queue_event(WindowEvent::Ime(Ime::Enabled));
+        }
+    }
+
+    /// Whether `event`, a key `key_down` just handed to the input system, is an auto-repeat that
+    /// the input system swallowed for press-and-hold.
+    ///
+    /// Holding a letter that has accents does not repeat it: the system offers the accents in a
+    /// menu (WebKit r208143, winit#3617). It swallows the repeats the view hands to
+    /// `interpretKeyEvents:` without a single call to the text input client, and the application
+    /// must not see them either, or it types the letter again and again under the menu.
+    ///
+    /// Only a plain or shifted character can be swallowed. Cmd, Ctrl and Option combinations,
+    /// and keys without text (arrows, function keys), repeat as usual even when the input system
+    /// does not call the client for them: holding Cmd+Z undoes step by step.
+    fn is_press_and_hold_repeat(&self, event: &NSEvent) -> bool {
+        if !self.ivars().ime_allowed.get() || self.ivars().client_called.get() {
+            return false;
+        }
+        if !unsafe { event.isARepeat() } {
+            return false;
+        }
+        let modifiers = event_mods(event).state();
+        if modifiers.control_key() || modifiers.alt_key() || modifiers.super_key() {
+            return false;
+        }
+        // Keys without text carry a control character, or for arrows and function keys a code
+        // point of the private use area.
+        unsafe { event.characters() }
+            .and_then(|characters| characters.to_string().chars().next())
+            .is_some_and(|c| !c.is_control() && !('\u{f700}'..='\u{f8ff}').contains(&c))
+    }
+
     fn current_input_source(&self) -> String {
         self.inputContext()
             .expect("input context")
@@ -888,6 +1006,8 @@ impl WinitView {
 
         // Clear markedText
         *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
+        // The input system must not read text the application takes no input for.
+        surrounding::clear();
 
         if self.ivars().ime_state.get() != ImeState::Disabled {
             self.ivars().ime_state.set(ImeState::Disabled);

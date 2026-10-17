@@ -82,6 +82,7 @@
 //! }
 //! ```
 
+use std::ops::Range;
 use std::os::raw::c_void;
 
 #[cfg(feature = "serde")]
@@ -528,4 +529,85 @@ pub enum OptionAsAlt {
     /// No special handling is applied for `Option` key.
     #[default]
     None,
+}
+
+/// Tells the text input system which text surrounds the caret of the text field that has the
+/// focus.
+///
+/// The press-and-hold accent menu, the Character Viewer and dictation ask the focused view for
+/// the selection and the text before it. Without an answer, winit reports no selection, and the
+/// system offers neither accents nor dictation (rust-windowing/winit#3617, #4666). With one:
+///
+/// - Holding a letter shows the accent menu. The chosen accent arrives as an [`Ime::Commit`] that
+///   replaces the letter typed first, see [`take_ime_replacement`].
+/// - The Character Viewer ([`order_front_character_palette`]) and dictation insert their text as
+///   [`Ime::Commit`] events.
+///
+/// This needs [`Window::set_ime_allowed`] to be on. It stays set until
+/// [`clear_ime_surrounding_text`] or until IME is no longer allowed.
+///
+/// `text` is the whole text of the field and `selection` the selected bytes of it, a caret when
+/// empty. The selection is clamped to `text`, onto char boundaries. Call this whenever the text
+/// or the selection changes.
+///
+/// Only the field that has the focus may set it, and never one that holds a secret: the text is
+/// handed to the system's input methods.
+///
+/// Must be called on the main thread, else it does nothing.
+///
+/// [`Ime::Commit`]: crate::event::Ime::Commit
+pub fn set_ime_surrounding_text(text: &str, selection: Range<usize>) {
+    crate::platform_impl::set_ime_surrounding_text(text, selection);
+}
+
+/// Forgets the text set with [`set_ime_surrounding_text`] and the replacement of the last
+/// commit. Call it when the field loses the focus.
+///
+/// Must be called on the main thread, else it does nothing.
+pub fn clear_ime_surrounding_text() {
+    crate::platform_impl::clear_ime_surrounding_text();
+}
+
+/// A commit that replaces text the application already has, instead of inserting at the caret.
+///
+/// Choosing an accent from the press-and-hold menu replaces the letter that was typed first. See
+/// [`take_ime_replacement`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImeReplacement {
+    /// The bytes of the text last passed to [`set_ime_surrounding_text`] that the commit
+    /// replaces, on char boundaries of that text.
+    pub range: Range<usize>,
+    /// The text that replaces them, the same as the text of the [`Ime::Commit`].
+    ///
+    /// [`Ime::Commit`]: crate::event::Ime::Commit
+    pub text: String,
+}
+
+/// Takes the replacement that belongs to the [`Ime::Commit`] just received, if it has one.
+///
+/// Call it once for every `Ime::Commit`. With a replacement, the text replaces
+/// [`ImeReplacement::range`] of the text set with [`set_ime_surrounding_text`]; without one, it
+/// is inserted at the caret as usual. Every commit sets or clears the replacement, so one never
+/// outlives its commit. The text of the field may have changed since it was set, so check that
+/// the range still names text you can replace, and that [`ImeReplacement::text`] is the text of
+/// the commit; if not, insert at the caret.
+///
+/// Must be called on the main thread, else it returns `None`.
+///
+/// [`Ime::Commit`]: crate::event::Ime::Commit
+pub fn take_ime_replacement() -> Option<ImeReplacement> {
+    crate::platform_impl::take_ime_replacement()
+}
+
+/// Shows the Character Viewer (Emoji & Symbols). Applications with an Edit menu get it from
+/// Ctrl+Cmd+Space; an application without one calls this for that shortcut.
+///
+/// The viewer inserts into the view that has the focus, as [`Ime::Commit`] events. See
+/// [`set_ime_surrounding_text`].
+///
+/// Must be called on the main thread, else it does nothing.
+///
+/// [`Ime::Commit`]: crate::event::Ime::Commit
+pub fn order_front_character_palette() {
+    crate::platform_impl::order_front_character_palette();
 }

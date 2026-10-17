@@ -11,11 +11,16 @@ mod ffi;
 mod menu;
 mod monitor;
 mod observer;
+mod surrounding;
 mod view;
 mod window;
 mod window_delegate;
 
 use std::fmt;
+use std::ops::Range;
+
+use objc2_app_kit::NSApplication;
+use objc2_foundation::MainThreadMarker;
 
 pub(crate) use self::event::{physicalkey_to_scancode, scancode_to_physicalkey, KeyEventExtra};
 pub(crate) use self::event_loop::{
@@ -32,6 +37,32 @@ pub(crate) use self::window::Window;
 pub(crate) use crate::cursor::OnlyCursorImageSource as PlatformCustomCursorSource;
 pub(crate) use crate::icon::NoIcon as PlatformIcon;
 pub(crate) use crate::platform_impl::Fullscreen;
+
+/// See [`crate::platform::macos::set_ime_surrounding_text`].
+pub fn set_ime_surrounding_text(text: &str, selection: Range<usize>) {
+    if MainThreadMarker::new().is_some() {
+        surrounding::set(text, selection);
+    }
+}
+
+/// See [`crate::platform::macos::clear_ime_surrounding_text`].
+pub fn clear_ime_surrounding_text() {
+    if MainThreadMarker::new().is_some() {
+        surrounding::clear();
+    }
+}
+
+/// See [`crate::platform::macos::take_ime_replacement`].
+pub fn take_ime_replacement() -> Option<crate::platform::macos::ImeReplacement> {
+    MainThreadMarker::new().and_then(|_| surrounding::take_replacement())
+}
+
+/// See [`crate::platform::macos::order_front_character_palette`].
+pub fn order_front_character_palette() {
+    if let Some(mtm) = MainThreadMarker::new() {
+        NSApplication::sharedApplication(mtm).orderFrontCharacterPalette(None);
+    }
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DeviceId;
