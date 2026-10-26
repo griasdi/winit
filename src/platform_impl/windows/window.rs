@@ -271,15 +271,22 @@ impl Window {
     #[inline]
     pub fn set_min_inner_size(&self, size: Option<Size>) {
         self.window_state_lock().min_size = size;
-        // Make windows re-check the window size bounds.
-        let size = self.inner_size();
-        self.request_inner_size(size.into());
+        self.recheck_size_bounds();
     }
 
     #[inline]
     pub fn set_max_inner_size(&self, size: Option<Size>) {
         self.window_state_lock().max_size = size;
-        // Make windows re-check the window size bounds.
+        self.recheck_size_bounds();
+    }
+
+    /// Makes Windows re-check the window size bounds by requesting the current size. Not while
+    /// the window is minimized: a minimized window has no client area, so the request would
+    /// shrink the window it is restored to down to a sliver.
+    fn recheck_size_bounds(&self) {
+        if util::is_minimized(self.hwnd()) {
+            return;
+        }
         let size = self.inner_size();
         self.request_inner_size(size.into());
     }

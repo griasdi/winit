@@ -45,3 +45,5 @@ changelog entry.
 - On Windows, fix a transparent window turning opaque outside its drawn content after leaving
   fullscreen.
 - On Windows, fix a window that redraws every frame keeping the other windows from redrawing.
+- On Windows, fix a minimized window coming back only a title bar high after its minimum or
+  maximum size was set while it was minimized.
