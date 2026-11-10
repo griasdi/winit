@@ -51,3 +51,5 @@ changelog entry.
   through the mask, such as Task Manager, showed a background and rough edges.
 - On Windows, fix window icons rendering with red and blue swapped when the same `Icon` is
   applied more than once. The RGBA to BGRA conversion no longer mutates the shared pixel buffer.
+- On Windows, fix IME preedit cursor offsets around surrogate pairs when no target clause is
+  selected.
