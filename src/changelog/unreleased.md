@@ -54,3 +54,5 @@ changelog entry.
 - On Windows, fix IME preedit cursor offsets around surrogate pairs when no target clause is
   selected.
 - On Windows, avoid overflow when negating minimum mouse-wheel deltas.
+- On Windows, fix a crash occurring when trying to create a DXGI surface on a window that is both
+  fullscreen and always on top.
