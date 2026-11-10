@@ -73,3 +73,5 @@ changelog entry.
   contains special characters (e.g. emojis) caused by incorrect UTF-16 to UTF-8 offset conversion.
 - On macOS, report the `NSUnderlineStyle` and `NSMarkedClauseSegment` attributes as valid for
   marked text, so input methods can style the clauses of a preedit.
+- On macOS, discard the input method's marked text when IME is disabled, so an unfinished
+  composition is not resumed (and committed again) when IME is re-enabled.

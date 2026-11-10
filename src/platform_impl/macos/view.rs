@@ -1006,6 +1006,15 @@ impl WinitView {
             return;
         }
 
+        // Tell the input method to drop any composition in progress. Otherwise it keeps the
+        // marked text and continues composing it once IME is enabled again (e.g. when focus
+        // returns to a text input), even though the application has already ended it.
+        if self.ivars().marked_text.borrow().length() > 0 {
+            if let Some(input_context) = self.inputContext() {
+                input_context.discardMarkedText();
+            }
+        }
+
         // Clear markedText
         *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
         // The input system must not read text the application takes no input for.
