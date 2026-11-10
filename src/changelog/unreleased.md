@@ -53,3 +53,4 @@ changelog entry.
   applied more than once. The RGBA to BGRA conversion no longer mutates the shared pixel buffer.
 - On Windows, fix IME preedit cursor offsets around surrogate pairs when no target clause is
   selected.
+- On Windows, avoid overflow when negating minimum mouse-wheel deltas.

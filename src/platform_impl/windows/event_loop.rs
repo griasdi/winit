@@ -1824,7 +1824,7 @@ unsafe fn public_window_callback_inner(
             use crate::event::MouseScrollDelta::LineDelta;
 
             let value = (wparam >> 16) as i16;
-            let value = -value as f32 / WHEEL_DELTA as f32; // NOTE: inverted! See https://github.com/rust-windowing/winit/pull/2105/
+            let value = inverted_wheel_delta(value); // NOTE: inverted! See https://github.com/rust-windowing/winit/pull/2105/
 
             update_modifiers(window, userdata);
 
@@ -2694,7 +2694,7 @@ unsafe fn handle_raw_input(userdata: &ThreadMsgTargetData, data: RAWINPUT) {
         }
         if util::has_flag(button_flags as u32, RI_MOUSE_HWHEEL) {
             let button_data = unsafe { mouse.Anonymous.Anonymous.usButtonData } as i16;
-            let delta = -button_data as f32 / WHEEL_DELTA as f32;
+            let delta = inverted_wheel_delta(button_data);
             userdata.send_event(Event::DeviceEvent {
                 device_id,
                 event: MouseWheel { delta: LineDelta(delta, 0.0) },
@@ -2763,5 +2763,21 @@ fn get_pointer_move_kind(
         PointerMoveKind::Leave
     } else {
         PointerMoveKind::None
+    }
+}
+
+fn inverted_wheel_delta(value: i16) -> f32 {
+    -(value as f32) / WHEEL_DELTA as f32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inverted_wheel_delta_handles_minimum_value() {
+        assert_eq!(inverted_wheel_delta(i16::MIN), 32768.0 / WHEEL_DELTA as f32);
+        assert_eq!(inverted_wheel_delta(120), -1.0);
+        assert_eq!(inverted_wheel_delta(-120), 1.0);
     }
 }
