@@ -60,3 +60,6 @@ changelog entry.
   window's state lock.
 - On Windows, fix getting the window's DPI internally leaking `HDC` handles. `GetDC` is now only
   called on versions before Windows 8.1, which also improves performance.
+- On Windows, fix a freeze that occurs when the keyboard layout is switched by tools such as
+  Punto Switcher. The `WM_INPUTLANGCHANGE` message now refreshes the cached keyboard layout,
+  while still deferring to `DefWindowProc` for normal propagation.
