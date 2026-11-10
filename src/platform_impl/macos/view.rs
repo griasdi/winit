@@ -384,7 +384,10 @@ declare_class!(
         #[method_id(validAttributesForMarkedText)]
         fn valid_attributes_for_marked_text(&self) -> Retained<NSArray<NSAttributedStringKey>> {
             trace_scope!("validAttributesForMarkedText");
-            NSArray::new()
+            NSArray::from_id_slice(&[
+                NSString::from_str("NSUnderlineStyle"),
+                NSString::from_str("NSMarkedClauseSegment"),
+            ])
         }
 
         #[method_id(attributedSubstringForProposedRange:actualRange:)]
