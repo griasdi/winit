@@ -56,3 +56,5 @@ changelog entry.
 - On Windows, avoid overflow when negating minimum mouse-wheel deltas.
 - On Windows, fix a crash occurring when trying to create a DXGI surface on a window that is both
   fullscreen and always on top.
+- On Windows, fix a deadlock when the taskbar is recreated while another thread holds the
+  window's state lock.
