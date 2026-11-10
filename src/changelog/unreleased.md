@@ -63,3 +63,5 @@ changelog entry.
 - On Windows, fix a freeze that occurs when the keyboard layout is switched by tools such as
   Punto Switcher. The `WM_INPUTLANGCHANGE` message now refreshes the cached keyboard layout,
   while still deferring to `DefWindowProc` for normal propagation.
+- On Wayland, fix the text input being destroyed whenever a seat capability changed. This made IME
+  input stop working in already-running applications after the seat's capabilities were updated.
