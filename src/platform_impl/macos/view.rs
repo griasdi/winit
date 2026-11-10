@@ -340,27 +340,26 @@ declare_class!(
                 self.ivars().ime_state.set(ImeState::Ground);
             }
 
+            let string = string.to_string();
             let cursor_range = if string.is_empty() {
                 // An empty string basically means that there's no preedit, so indicate that by
                 // sending a `None` cursor range.
                 None
             } else {
-                // Clamp to string length to avoid NSRangeException from out-of-bounds
-                // indices sent by macOS IME (e.g. native Pinyin, see
-                // https://github.com/alacritty/alacritty/issues/8791).
-                let len = string.length();
-                let location = selected_range.location.min(len);
-                let end = selected_range.end().min(len);
-                // Convert the selected range from UTF-16 indices to UTF-8 indices.
-                let sub_string_a = unsafe { string.substringToIndex(location) };
-                let sub_string_b = unsafe { string.substringToIndex(end) };
-                let lowerbound_utf8 = sub_string_a.len();
-                let upperbound_utf8 = sub_string_b.len();
+                // Convert the selected range from UTF-16 code unit indices to UTF-8 byte
+                // offsets. `utf16_to_utf8_offset` is defensive: it snaps an offset that would
+                // split a surrogate pair down to the character boundary and clamps an
+                // out-of-bounds offset to the string length, so no `NSRangeException` is
+                // possible and the resulting range can never be inverted (`lower <= upper`).
+                // IMEs are known to send both mid-surrogate and out-of-bounds offsets (e.g.
+                // native Pinyin, see https://github.com/alacritty/alacritty/issues/8791).
+                let lowerbound_utf8 = utf16_to_utf8_offset(&string, selected_range.location);
+                let upperbound_utf8 = utf16_to_utf8_offset(&string, selected_range.end());
                 Some((lowerbound_utf8, upperbound_utf8))
             };
 
             // Send WindowEvent for updating marked text
-            self.queue_event(WindowEvent::Ime(Ime::Preedit(string.to_string(), cursor_range)));
+            self.queue_event(WindowEvent::Ime(Ime::Preedit(string, cursor_range)));
         }
 
         #[method(unmarkText)]
@@ -1258,5 +1257,70 @@ fn replace_event(event: &NSEvent, option_as_alt: OptionAsAlt) -> Retained<NSEven
         }
     } else {
         event.copy()
+    }
+}
+
+/// Convert a UTF-16 code unit offset into the corresponding UTF-8 byte offset within `s`.
+///
+/// IMEs are not required to send well-formed offsets, so this is defensive: an offset that
+/// would split a surrogate pair is snapped down to the start of that character, and an
+/// out-of-bounds offset is clamped to the end of the string (e.g. native Pinyin sends
+/// out-of-bounds indices, see <https://github.com/alacritty/alacritty/issues/8791>).
+///
+/// The mapping is monotone non-decreasing, so applying it to the location and end of an
+/// `NSRange` (where `location <= end`) can never produce an inverted byte range.
+fn utf16_to_utf8_offset(s: &str, utf16_offset: usize) -> usize {
+    let mut utf16_pos = 0;
+    for (utf8_pos, ch) in s.char_indices() {
+        if utf16_pos >= utf16_offset {
+            return utf8_pos;
+        }
+        utf16_pos += ch.len_utf16();
+        // The target offset lands strictly inside this character's UTF-16 representation,
+        // i.e. it splits a surrogate pair: snap down to the character boundary.
+        if utf16_pos > utf16_offset {
+            return utf8_pos;
+        }
+    }
+    s.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Apply the UTF-16 -> UTF-8 conversion to both ends of a `selectedRange {loc, len}`,
+    /// mirroring what `set_marked_text` does for the emitted `Ime::Preedit` cursor range.
+    fn convert(s: &str, loc: usize, len: usize) -> (usize, usize) {
+        (utf16_to_utf8_offset(s, loc), utf16_to_utf8_offset(s, loc + len))
+    }
+
+    #[test]
+    fn mid_surrogate_offset_snaps_down() {
+        // "😀a": 😀 is one char = 2 UTF-16 units = 4 UTF-8 bytes; offset 1 is mid-pair.
+        assert_eq!(utf16_to_utf8_offset("\u{1F600}a", 1), 0);
+        // Offset 2 is the boundary just after the pair.
+        assert_eq!(utf16_to_utf8_offset("\u{1F600}a", 2), 4);
+    }
+
+    #[test]
+    fn no_longer_inverted() {
+        // "a😀b" with selectedRange {1,1} must keep lower <= upper.
+        assert_eq!(convert("a\u{1F600}b", 1, 1), (1, 1));
+    }
+
+    #[test]
+    fn out_of_bounds_clamps_to_len() {
+        // An out-of-bounds offset maps to the string length instead of triggering an
+        // NSRangeException.
+        assert_eq!(convert("\u{1F600}a", 99, 0), (5, 5));
+    }
+
+    #[test]
+    fn well_formed_inputs_are_identity() {
+        assert_eq!(convert("a\u{1F600}b", 3, 0), (5, 5));
+        assert_eq!(convert("a\u{1F600}b", 4, 0), (6, 6));
+        // BMP multi-byte (Japanese): each char is 1 UTF-16 unit and 3 UTF-8 bytes.
+        assert_eq!(convert("\u{3053}\u{3093}", 1, 1), (3, 6));
     }
 }

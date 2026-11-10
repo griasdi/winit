@@ -69,3 +69,5 @@ changelog entry.
   `Window::show_window_menu` when the interaction was started by touch.
 - On Wayland, fix a protocol error when setting a custom cursor on compositors with `wl_surface`
   version below 3.
+- On macOS, fix a panic and incorrect cursor position in `Ime::Preedit` when the preedit string
+  contains special characters (e.g. emojis) caused by incorrect UTF-16 to UTF-8 offset conversion.
