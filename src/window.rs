@@ -1515,7 +1515,7 @@ impl Window {
     /// ## Platform-specific
     ///
     /// - **X11:** Un-grabs the cursor.
-    /// - **Wayland:** Requires the cursor to be inside the window to be dragged.
+    /// - **Wayland:** Requires a pointer button or touch point to be down inside the window.
     /// - **macOS:** May prevent the button release event to be triggered.
     /// - **iOS / Android / Web:** Always returns an [`ExternalError::NotSupported`].
     #[inline]
@@ -1531,6 +1531,7 @@ impl Window {
     ///
     /// ## Platform-specific
     ///
+    /// - **Wayland:** Requires a pointer button or touch point to be down inside the window.
     /// - **macOS:** Always returns an [`ExternalError::NotSupported`]
     /// - **iOS / Android / Web:** Always returns an [`ExternalError::NotSupported`].
     #[inline]

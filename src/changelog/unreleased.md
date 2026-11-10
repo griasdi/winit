@@ -65,3 +65,5 @@ changelog entry.
   while still deferring to `DefWindowProc` for normal propagation.
 - On Wayland, fix the text input being destroyed whenever a seat capability changed. This made IME
   input stop working in already-running applications after the seat's capabilities were updated.
+- On Wayland, use the touch serial for `Window::drag_window`, `Window::drag_resize_window` and
+  `Window::show_window_menu` when the interaction was started by touch.
