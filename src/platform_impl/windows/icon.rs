@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 use std::path::Path;
 use std::sync::Arc;
-use std::{fmt, io, mem};
+use std::{fmt, io};
 
 use cursor_icon::CursorIcon;
 use windows_sys::core::PCWSTR;
@@ -20,24 +20,22 @@ use crate::icon::*;
 
 use super::util;
 
-impl Pixel {
-    fn convert_to_bgra(&mut self) {
-        mem::swap(&mut self.r, &mut self.b);
-    }
-}
-
 impl RgbaIcon {
     fn into_windows_icon(self) -> Result<WinIcon, BadIcon> {
         let rgba = self.rgba;
-        let pixel_count = rgba.len() / PIXEL_SIZE;
-        let mut and_mask = Vec::with_capacity(pixel_count);
-        let pixels =
-            unsafe { std::slice::from_raw_parts_mut(rgba.as_ptr() as *mut Pixel, pixel_count) };
-        for pixel in pixels {
-            and_mask.push(pixel.a.wrapping_sub(u8::MAX)); // invert alpha channel
-            pixel.convert_to_bgra();
+        let width = self.width as usize;
+        // The AND mask is a monochrome bitmap: one bit per pixel, set where the pixel is
+        // transparent, with each row padded to a WORD boundary.
+        let mask_stride = (width + 15) / 16 * 2;
+        let mut and_mask = vec![0u8; mask_stride * self.height as usize];
+        let mut bgra = Vec::with_capacity(rgba.len());
+        for (i, pixel) in rgba.chunks_exact(PIXEL_SIZE).enumerate() {
+            if pixel[3] == 0 {
+                let (x, y) = (i % width, i / width);
+                and_mask[y * mask_stride + x / 8] |= 0x80 >> (x % 8);
+            }
+            bgra.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
         }
-        assert_eq!(and_mask.len(), pixel_count);
         let handle = unsafe {
             CreateIcon(
                 0,
@@ -46,7 +44,7 @@ impl RgbaIcon {
                 1,
                 (PIXEL_SIZE * 8) as u8,
                 and_mask.as_ptr(),
-                rgba.as_ptr(),
+                bgra.as_ptr(),
             )
         };
         if handle != 0 {

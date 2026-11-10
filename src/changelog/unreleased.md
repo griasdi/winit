@@ -47,3 +47,7 @@ changelog entry.
 - On Windows, fix a window that redraws every frame keeping the other windows from redrawing.
 - On Windows, fix a minimized window coming back only a title bar high after its minimum or
   maximum size was set while it was minimized.
+- On Windows, fix the transparency mask of icons created from RGBA data. Places that draw icons
+  through the mask, such as Task Manager, showed a background and rough edges.
+- On Windows, fix window icons rendering with red and blue swapped when the same `Icon` is
+  applied more than once. The RGBA to BGRA conversion no longer mutates the shared pixel buffer.
