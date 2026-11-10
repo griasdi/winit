@@ -58,3 +58,5 @@ changelog entry.
   fullscreen and always on top.
 - On Windows, fix a deadlock when the taskbar is recreated while another thread holds the
   window's state lock.
+- On Windows, fix getting the window's DPI internally leaking `HDC` handles. `GetDC` is now only
+  called on versions before Windows 8.1, which also improves performance.
